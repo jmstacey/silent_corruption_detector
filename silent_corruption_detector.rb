@@ -106,7 +106,7 @@ class SilentDataCorruptionDetector
   # Even single threaded, this is still IO-bound. I push around 70% single core usage at my max 200MB/s steady state read rate on a 2.8GHz Intel i5.
   def hash(file)
     begin
-      digest = Digest::MD5.file file
+      digest = Digest::SHA1.file file
       @bytes_processed += File.size?(file).to_i
     rescue => e
       puts "Notice:".red.on_yellow + " Unexpected error reading #{file}: #{e}. Skipping."
