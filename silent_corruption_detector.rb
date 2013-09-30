@@ -94,38 +94,22 @@ class SilentDataCorruptionDetector
     # Initialize the start path
     @START_PATH = start_path
     
-    @bytes_processed = 0
-    @files_processed = 0
-    @iteration       = nil # placeholder -- so you know that iteration is an instance variable
-    @current_file    = String.new
+    @bytes_processed    = 0
+    @files_processed    = 0
+    @total_bytes        = 0
+    @files              = Array.new
+    @current_file       = String.new
+    @iteration          = nil # placeholder -- so you know that iteration is an availabe instance variable
+    @last_msg_was_alert = false
   end
-
-  # def hash(file)
-  #   digest = Digest::SHA1.new
-  # 
-  #   begin
-  #     open(file, "r") do |io|
-  #       while (!io.eof)
-  #         read_buffer = io.readpartial(4096)
-  #         # digest.update(read_buffer)
-  #       end
-  #     end
-  #   rescue => e
-  #     puts "Warning: Unexpected error reading #{file}: #{e}. Skipping."
-  #     return nil
-  #   end
-  # 
-  #   digest.hexdigest
-  # end
   
-  # This variation is significantly faster than the above because there's less data thrashing--moving data into high level buffer and back out.
   # Even single threaded, this is still IO-bound. I push around 70% single core usage at my max 200MB/s steady state read rate on a 2.8GHz Intel i5.
   def hash(file)
     begin
-      digest = Digest::SHA1.file file
+      digest = Digest::MD5.file file
       @bytes_processed += File.size?(file).to_i
     rescue => e
-      puts "Warning:".red.on_yellow + " Unexpected error reading #{file}: #{e}. Skipping."
+      puts "Notice:".red.on_yellow + " Unexpected error reading #{file}: #{e}. Skipping."
       @last_msg_was_alert = true
       return nil
     end
@@ -155,7 +139,7 @@ class SilentDataCorruptionDetector
       end
     else
       # mtime looks different, so we expect the hash _could_ intentionally be different, so just update the DB
-      @DB[:files].where(file: file).update(mtime: File.mtime(file), iteration: @iteration, updated_at: Time.now)
+      @DB[:files].where(file: file).update(hash: hash(file), mtime: File.mtime(file), iteration: @iteration, updated_at: Time.now)
     end
   end
   
@@ -165,64 +149,84 @@ class SilentDataCorruptionDetector
     @DB[:Meta].where(key: 'iteration').update value: @iteration
   end
   
-  def show_progress(total_file_count)
+  def show_progress
     # "\e[A" moves cursor up one line
     # "\e[K" clears from the cursor position to the end of the line
     # "\r" moves the cursor to the start of the line
     
     # Clear the last 3 lines of the console
-    if @files_processed > 1 && !@last_msg_was_alert
+    if @last_msg_was_alert
+      @last_msg_was_alert = false
+    else
       print "\r\e[K"
       print "\e[A\e[K" * 3
-    else
-      @last_msg_was_alert = false
     end
     
     print "Current File   : #{@current_file}\n"
-    print "Total Processed: #{number_to_human_size(@bytes_processed)}\n"
+    print "Total Processed: #{number_to_human_size(@bytes_processed)} / #{number_to_human_size(@total_bytes)}\n"
     print "Total Progress : " + 
-          "#{number_to_percentage((@files_processed.to_f / total_file_count.to_f)*100, precision: 2)}".green.bold + 
-          " (#{number_with_delimiter(@files_processed)} / #{number_with_delimiter(total_file_count)} records)\n"
+          "#{number_to_percentage((@files_processed.to_f / @files.count.to_f)*100, precision: 2)}".green.bold + 
+          " (#{number_with_delimiter(@files_processed)} / #{number_with_delimiter(@files.count)} files)\n"
   end
   
-  def iterate(files)
+  def iterate
     bump_iteration
     
-    files.each do |file|
+    @files.each do |file|
       @files_processed += 1
-      
-      next if File.directory? file
-      
-      @current_file = file
-      db_record     = @DB[:files].where file: file
+      @current_file     = file
+      db_record         = @DB[:files].where file: file
       
       if db_record.count == 0
         create_record(file) 
       else
-        compare_record(file, db_record)
+        # Compare the record only if the database iteration is less than the current iteration
+        # This is because files may have multipl links pointing to them and we only want to scan them once
+        compare_record(file, db_record) if db_record.first[:iteration] < @iteration
       end
     end
     
     Thread.exit
   end
+  
+  def collect_inventory
+    Find.find(@START_PATH) do |path|
+      next if File.directory? path # Exclude directories
+      begin
+        @files << File.realpath(path)   # Use the true real path
+        @total_bytes += File.size path
+      rescue
+        next # The full path can't be resolved for some reason, probably because this is a broken symlink, so skip.
+      end
+    end
+  end
+  
+  def _show_collection_progress
+    print "\r\e[KApproximately #{number_with_delimiter(@files.count)} files (#{number_to_human_size(@total_bytes)}) to analyze."
+  end
+  
+  def _run_worker(worker_method, progress_method, trailing_progress = true, frequency = 1)
+    worker = Thread.new { self.send(worker_method) }
+    until worker.status == false
+      self.send progress_method
+      sleep 1
+    end
+    self.send progress_method if trailing_progress
+  end
 
   def run
-    puts "Collecting Live Inventory . . ."
-    files = Find.find(@START_PATH)
+    puts "Collecting Inventory . . ."
+    _run_worker :collect_inventory, :_show_collection_progress
     
-    puts "Approximately #{number_with_delimiter(files.count)} live records to analyze"
+    puts ""
     print '-' * 50
     print "\n" * 4
     
-    worker = Thread.new { iterate files }
-    until worker.status == false
-      show_progress(files.count)
-      sleep 1
-    end
-  
+    _run_worker :iterate, :show_progress
+    
     puts ""
     print '=' * 50
-    puts "\nDone! Checked the integrity of #{number_with_delimiter(@files_processed)} records. Possible silent data corruption will be noted in the output above, if any."
+    puts "\nDone! Checked the integrity of #{number_with_delimiter(@files_processed)} files. Possible silent data corruption will be noted in the output above, if any."
   end
   
 end
