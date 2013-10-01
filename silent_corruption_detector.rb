@@ -163,10 +163,10 @@ class SilentDataCorruptionDetector
     end
     
     print "Current File   : #{@current_file}\n"
-    print "Total Processed: #{number_to_human_size(@bytes_processed)} / #{number_to_human_size(@total_bytes)}\n"
+    print "Total Processed: #{number_with_delimiter(@files_processed)} / #{number_with_delimiter(@files.count)} files\n"
     print "Total Progress : " + 
-          "#{number_to_percentage((@files_processed.to_f / @files.count.to_f)*100, precision: 2)}".green.bold + 
-          " (#{number_with_delimiter(@files_processed)} / #{number_with_delimiter(@files.count)} files)\n"
+          "#{number_to_percentage((@bytes_processed.to_f / @total_bytes.to_f)*100, precision: 2)}".green.bold + 
+          " (#{number_to_human_size(@bytes_processed)} / #{number_to_human_size(@total_bytes)})\n"
   end
   
   def iterate
