@@ -1,4 +1,4 @@
-#!/usr/bin/env ruby 
+#!/usr/bin/env ruby
 
 # =Silent Corruption Detector
 #
@@ -27,19 +27,19 @@
 #
 # ==License
 # The MIT License (MIT)
-# 
+#
 # Copyright (c) 2013 Jon Stacey
-# 
+#
 # Permission is hereby granted, free of charge, to any person obtaining a copy of
 # this software and associated documentation files (the "Software"), to deal in
 # the Software without restriction, including without limitation the rights to
 # use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
 # the Software, and to permit persons to whom the Software is furnished to do so,
 # subject to the following conditions:
-# 
+#
 # The above copyright notice and this permission notice shall be included in all
 # copies or substantial portions of the Software.
-# 
+#
 # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 # IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
 # FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
@@ -67,18 +67,18 @@ DEFAULT_START_PATH = "/"
 DATABASE_FILE      = "data.db"
 
 class SilentDataCorruptionDetector
-  
+
   def initialize(start_path, db_file)
     @DB = Sequel.sqlite db_file
-    
+
     # Create the database schema if needed
     @DB.create_table? :meta do
       String :key,   null: false, unique: true
       String :value, null: true
     end
-    
+
     @DB[:meta].insert key: 'iteration', value: '0' unless @DB[:Meta].where(key: 'iteration').count > 0
-    
+
     @DB.create_table? :files do
       primary_key :id
       String      :file,            text: true, null: false, unique: true
@@ -90,19 +90,22 @@ class SilentDataCorruptionDetector
       index       :file,          unique: true
       index       [:file, :hash], unique: true
     end
-    
+
     # Initialize the start path
     @START_PATH = start_path
-    
+
     @bytes_processed    = 0
     @files_processed    = 0
     @total_bytes        = 0
+    @total_files        = 0
     @files              = Array.new
     @current_file       = String.new
-    @iteration          = nil # placeholder -- so you know that iteration is an availabe instance variable
-    @last_msg_was_alert = false
+    @last_file          = String.new
+    @iteration          = nil         # Integer
+    @last_msg_was_alert = false       # Boolean
+    @last_time_read     = nil         # Time
   end
-  
+
   # Even single threaded, this is still IO-bound. I push around 70% single core usage at my max 200MB/s steady state read rate on a 2.8GHz Intel i5.
   def hash(file)
     digest     = Digest::SHA1.new
@@ -116,6 +119,7 @@ class SilentDataCorruptionDetector
         io.read(16384, buffer)
         digest << buffer
         # bytes_read       += buffer.bytesize
+        @last_time_read   = Time.now
         @bytes_processed += buffer.bytesize
       end
     rescue => e
@@ -125,14 +129,14 @@ class SilentDataCorruptionDetector
     ensure
       io.close unless io.nil?
     end
-  
+
     return digest.hexdigest
   end
-  
+
   def create_record(file)
     hash = hash(file)
     return if hash.nil?
-    
+
     # Create the DB new record
     @DB[:files].insert file:       file,
                        hash:       hash,
@@ -141,7 +145,7 @@ class SilentDataCorruptionDetector
                        created_at: Time.now,
                        updated_at: Time.now
   end
-  
+
   def compare_record(file, db_record)
     if File.mtime(file) == db_record.first[:mtime]
       # mtime looks the same, so we expect the hash to be the same [no intentional changes]
@@ -151,21 +155,22 @@ class SilentDataCorruptionDetector
       end
     else
       # mtime looks different, so we expect the hash _could_ intentionally be different, so just update the DB
-      @DB[:files].where(file: file).update(hash: hash(file), mtime: File.mtime(file), iteration: @iteration, updated_at: Time.now)
+      file_hash = hash(file)
+      @DB[:files].where(file: file).update(hash: file_hash, mtime: File.mtime(file), iteration: @iteration, updated_at: Time.now) unless file_hash.nil?
     end
   end
-  
+
   def bump_iteration
     # Increment and retrieve the current iteration number
     @iteration = @DB[:Meta].where(key: 'iteration').first[:value].to_i + 1
     @DB[:Meta].where(key: 'iteration').update value: @iteration
   end
-  
+
   def show_progress
     # "\e[A" moves cursor up one line
     # "\e[K" clears from the cursor position to the end of the line
     # "\r" moves the cursor to the start of the line
-    
+
     # Clear the last 3 lines of the console
     if @last_msg_was_alert
       @last_msg_was_alert = false
@@ -173,74 +178,113 @@ class SilentDataCorruptionDetector
       print "\r\e[K"
       print "\e[A\e[K" * 3
     end
-    
+
     print "Current File   : #{@current_file}\n"
-    print "Total Processed: #{number_with_delimiter(@files_processed)} / #{number_with_delimiter(@files.count)} files\n"
-    print "Total Progress : " + 
-          "#{number_to_percentage((@bytes_processed.to_f / @total_bytes.to_f)*100, precision: 2)}".green.bold + 
+    print "Total Processed: #{number_with_delimiter(@files_processed)} / #{number_with_delimiter(@total_files)} files\n"
+    print "Total Progress : " +
+          "#{number_to_percentage((@bytes_processed.to_f / @total_bytes.to_f)*100, precision: 2)}".green.bold +
           " (#{number_to_human_size(@bytes_processed)} / #{number_to_human_size(@total_bytes)})\n"
   end
-  
+
   def iterate
     bump_iteration
-    
-    @files.each do |file|
-      @files_processed += 1
+
+    # First call
+    @last_time_read = Time.now
+    timed_worker    = _run_worker :_process_file_queue, nil, false
+
+    until @files.empty?
+      if (Time.now - @last_time_read).to_f > 5 # Safe 5 second timeout
+        timed_worker.kill
+        timed_worker.join # Ensure the thread is dead
+
+        # If we haven't retried this file yet, readd it to the queue and restart the worker
+        if @last_file == @current_file
+          puts "Notice:".red.on_yellow + " Timeout reading #{@current_file}. Skipping."
+          @last_msg_was_alert = true
+        else
+          puts "Notice:".red.on_yellow + " Timeout reading #{@current_file}. Retrying."
+          @last_msg_was_alert = true
+
+          @last_file = @current_file
+          @files << @current_file
+        end
+        timed_worker = _run_worker :_process_file_queue, nil, false
+      end
+
+      sleep 1
+    end
+
+    timed_worker.join # Ensure that the worker is done
+    Thread.exit
+  end
+
+  def _process_file_queue
+    until @files.empty?
+      file              = @files.pop
       @current_file     = file
+      @files_processed += 1
       db_record         = @DB[:files].where file: file
-      
+
       if db_record.count == 0
-        create_record(file) 
+        create_record(file)
       else
         # Compare the record only if the database iteration is less than the current iteration
         # This is because files may have multipl links pointing to them and we only want to scan them once
         compare_record(file, db_record) if db_record.first[:iteration] < @iteration
       end
     end
-    
+
     Thread.exit
   end
-  
+
   def collect_inventory
     Find.find(@START_PATH) do |path|
       next if File.directory? path # Exclude directories
       begin
         @files << File.realpath(path)   # Use the true real path
+        @total_files += 1
         @total_bytes += File.size path
       rescue
         next # The full path can't be resolved for some reason, probably because this is a broken symlink, so skip.
       end
     end
+    @files.reverse!
   end
-  
+
   def _show_collection_progress
-    print "\r\e[KApproximately #{number_with_delimiter(@files.count)} files (#{number_to_human_size(@total_bytes)}) to analyze."
+    print "\r\e[KApproximately #{number_with_delimiter(@total_files)} files (#{number_to_human_size(@total_bytes)}) to analyze."
   end
-  
+
   def _run_worker(worker_method, progress_method, trailing_progress = true, frequency = 1)
     worker = Thread.new { self.send(worker_method) }
-    until worker.status == false
-      self.send progress_method
-      sleep 1
+    worker.abort_on_exception = true
+    unless progress_method.nil?
+      until worker.status == false
+        self.send progress_method
+        sleep 1
+      end
+      self.send progress_method if trailing_progress
     end
-    self.send progress_method if trailing_progress
+
+    return worker
   end
 
   def run
     puts "Collecting Inventory . . ."
     _run_worker :collect_inventory, :_show_collection_progress
-    
+
     puts ""
     print '-' * 50
     print "\n" * 4
-    
+
     _run_worker :iterate, :show_progress
-    
+
     puts ""
     print '=' * 50
     puts "\nDone! Checked the integrity of #{number_with_delimiter(@files_processed)} files. Possible silent data corruption will be noted in the output above, if any."
   end
-  
+
 end
 
 detector = SilentDataCorruptionDetector.new(ARGV[0].nil? ? DEFAULT_START_PATH : ARGV[0], DATABASE_FILE)
