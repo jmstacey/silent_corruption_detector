@@ -63,8 +63,8 @@ require 'action_view'
 
 include ActionView::Helpers::NumberHelper
 
-DEFAULT_START_PATH = "/"
-DATABASE_FILE      = "data.db"
+DEFAULT_START_PATH     = "/"
+DEFAULT_DATABASE_FILE  = "data.db"
 
 class SilentDataCorruptionDetector
 
@@ -287,5 +287,5 @@ class SilentDataCorruptionDetector
 
 end
 
-detector = SilentDataCorruptionDetector.new(ARGV[0].nil? ? DEFAULT_START_PATH : ARGV[0], DATABASE_FILE)
+detector = SilentDataCorruptionDetector.new(ARGV[0].nil? ? DEFAULT_START_PATH : ARGV[0], ARGV[1].nil? ? DEFAULT_DATABASE_FILE : ARGV[1])
 detector.run
