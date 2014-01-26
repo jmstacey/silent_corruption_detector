@@ -69,7 +69,7 @@ DEFAULT_DATABASE_FILE  = "data.db"
 class SilentDataCorruptionDetector
 
   def initialize(start_path, db_file)
-    @DB = Sequel.sqlite db_file
+    @DB = Sequel.sqlite db_file, max_connections: 1
 
     # Create the database schema if needed
     @DB.create_table? :meta do
@@ -138,12 +138,13 @@ class SilentDataCorruptionDetector
     return if hash.nil?
 
     # Create the DB new record
-    @DB[:files].insert file:       file,
-                       hash:       hash,
-                       mtime:      File.mtime(file),
-                       iteration:  @iteration,
-                       created_at: Time.now,
-                       updated_at: Time.now
+    _db_call { @DB[:files].insert file:       file,
+                                  hash:       hash,
+                                  mtime:      File.mtime(file),
+                                  iteration:  @iteration,
+                                  created_at: Time.now,
+                                  updated_at: Time.now
+                                }
   end
 
   def compare_record(file, db_record)
@@ -156,7 +157,7 @@ class SilentDataCorruptionDetector
     else
       # mtime looks different, so we expect the hash _could_ intentionally be different, so just update the DB
       file_hash = hash(file)
-      @DB[:files].where(file: file).update(hash: file_hash, mtime: File.mtime(file), iteration: @iteration, updated_at: Time.now) unless file_hash.nil?
+      _db_call { @DB[:files].where(file: file).update(hash: file_hash, mtime: File.mtime(file), iteration: @iteration, updated_at: Time.now) } unless file_hash.nil?
     end
   end
 
@@ -224,7 +225,7 @@ class SilentDataCorruptionDetector
       file              = @files.pop
       @current_file     = file
       @files_processed += 1
-      db_record         = @DB[:files].where file: file
+      db_record         = _db_call { @DB[:files].where file: file }
 
       if db_record.count == 0
         create_record(file)
@@ -283,6 +284,14 @@ class SilentDataCorruptionDetector
     puts ""
     print '=' * 50
     puts "\nDone! Checked the integrity of #{number_with_delimiter(@files_processed)} files. Possible silent data corruption will be noted in the output above, if any."
+  end
+
+  def _db_call
+    begin
+      yield
+    rescue SQLite3::CantOpenException
+      puts "Notice:".red.on_yellow + " SQLite3 Can't open Exception. Retrying."
+    end
   end
 
 end
