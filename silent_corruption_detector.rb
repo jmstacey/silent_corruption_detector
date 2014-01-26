@@ -123,7 +123,7 @@ class SilentDataCorruptionDetector
         @bytes_processed += buffer.bytesize
       end
     rescue => e
-      puts "Notice:".red.on_yellow + " Unexpected error reading #{file}: #{e}. Skipping."
+      puts "Notice (error reading):".red.on_yellow + " #{e}. Skipping."
       @last_msg_was_alert = true
       return nil
     ensure
