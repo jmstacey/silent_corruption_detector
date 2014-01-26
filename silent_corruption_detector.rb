@@ -21,9 +21,10 @@
 # (2) If the mtime of the live file and previous record are the same, but the SHA1 is different, then there may have been some unintended data corruption.
 #
 # ==Usage
-# ./silent_corruption_detector.rb [START PATH]
+# ./silent_corruption_detector.rb [START PATH] [DATABASE FILE]
 #
 # If no [START PATH] is provided, the default will use the root (/) directory
+# If no [DATABASE FILE] is provided, the default will use ./data.db (in the working directory)
 #
 # ==License
 # The MIT License (MIT)
