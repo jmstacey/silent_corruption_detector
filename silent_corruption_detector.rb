@@ -150,6 +150,11 @@ class SilentDataCorruptionDetector
   end
 
   def compare_record(file, db_record)
+    if !File.exists?(file)
+      puts "Notice:".red.on_yellow + " File no longer exists #{@current_file}. Skipping."
+      return
+    end
+
     if File.mtime(file) == db_record.first[:mtime]
       # mtime looks the same, so we expect the hash to be the same [no intentional changes]
       if db_record.first[:hash] != hash(file)
@@ -233,7 +238,7 @@ class SilentDataCorruptionDetector
         create_record(file)
       else
         # Compare the record only if the database iteration is less than the current iteration
-        # This is because files may have multipl links pointing to them and we only want to scan them once
+        # This is because files may have multiple links pointing to them and we only want to scan them once
         compare_record(file, db_record) if db_record.first[:iteration] < @iteration
       end
     end
