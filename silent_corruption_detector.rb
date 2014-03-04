@@ -69,7 +69,7 @@ DEFAULT_DATABASE_FILE  = "data.db"
 
 class SilentDataCorruptionDetector
 
-  def initialize(start_path, db_file)
+  def initialize(start_path, db_file, skip_realpath = false)
     @DB = Sequel.sqlite db_file, max_connections: 1
 
     # Create the database schema if needed
@@ -102,9 +102,10 @@ class SilentDataCorruptionDetector
     @files              = Array.new
     @current_file       = String.new
     @last_file          = String.new
-    @iteration          = nil         # Integer
-    @last_msg_was_alert = false       # Boolean
-    @last_time_read     = nil         # Time
+    @iteration          = nil           # Integer
+    @last_msg_was_alert = false         # Boolean
+    @last_time_read     = nil           # Time
+    @skip_realpath      = skip_realpath # Boolean
   end
 
   # Even single threaded, this is still IO-bound. I push around 70% single core usage at my max 200MB/s steady state read rate on a 2.8GHz Intel i5.
@@ -244,7 +245,11 @@ class SilentDataCorruptionDetector
     Find.find(@START_PATH) do |path|
       next if File.directory? path # Exclude directories
       begin
-        @files << File.realpath(path)   # Use the true real path
+        if @skip_realpath
+          @files << path
+        else
+          @files << File.realpath(path)   # Use the true real path
+        end
         @total_files += 1
         @total_bytes += File.size path
       rescue
@@ -297,5 +302,15 @@ class SilentDataCorruptionDetector
 
 end
 
-detector = SilentDataCorruptionDetector.new(ARGV[0].nil? ? DEFAULT_START_PATH : ARGV[0], ARGV[1].nil? ? DEFAULT_DATABASE_FILE : ARGV[1])
+# Main Program
+
+# Todo implement proper OptionParser http://ruby-doc.org/stdlib-2.1.0/libdoc/optparse/rdoc/OptionParser.html
+unless ARGV[2].nil?
+  abort "Argument 3 (#{ARGV[2]}) is not valid" if ARGV[2] != "--skip_realpath"
+end
+
+detector = SilentDataCorruptionDetector.new(ARGV[0].nil? ? DEFAULT_START_PATH : ARGV[0],
+                                            ARGV[1].nil? ? DEFAULT_DATABASE_FILE : ARGV[1],
+                                            ARGV[2]
+                                            )
 detector.run
