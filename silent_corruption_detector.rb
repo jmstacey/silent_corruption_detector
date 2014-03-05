@@ -151,7 +151,7 @@ class SilentDataCorruptionDetector
 
   def compare_record(file, db_record)
     if !File.exists?(file)
-      puts "Notice:".red.on_yellow + " File no longer exists #{@current_file}. Skipping."
+      puts "Notice (transient file):".red.on_yellow + " File no longer exists #{@current_file}. Skipping."
       return
     end
 
