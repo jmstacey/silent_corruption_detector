@@ -64,6 +64,8 @@ require 'action_view'
 
 include ActionView::Helpers::NumberHelper
 
+I18n.config.enforce_available_locales = false
+
 DEFAULT_START_PATH     = "/"
 DEFAULT_DATABASE_FILE  = "data.db"
 
