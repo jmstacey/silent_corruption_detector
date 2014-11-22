@@ -108,6 +108,10 @@ class SilentDataCorruptionDetector
     @last_msg_was_alert = false         # Boolean
     @last_time_read     = nil           # Time
     @skip_realpath      = skip_realpath # Boolean
+    @bytes_last_update  = 0
+    @count_of_matching_hashes = 0
+    @count_of_updated_records = 0
+    @count_of_new_records     = 0
   end
 
   # Even single threaded, this is still IO-bound. I push around 70% single core usage at my max 200MB/s steady state read rate on a 2.8GHz Intel i5.
@@ -149,6 +153,7 @@ class SilentDataCorruptionDetector
                                   created_at: Time.now,
                                   updated_at: Time.now
                                 }
+    @count_of_new_records += 1
   end
 
   def compare_record(file, db_record)
@@ -159,7 +164,9 @@ class SilentDataCorruptionDetector
 
     if File.mtime(file) == db_record.first[:mtime]
       # mtime looks the same, so we expect the hash to be the same [no intentional changes]
-      if db_record.first[:hash] != hash(file)
+      if db_record.first[:hash] == hash(file)
+        @count_of_matching_hashes += 1
+      else
         puts "!!! ALERT !!!".white.on_red.bold.blink + " Possible silent corruption on #{file}. The mtime is the same, but hash differs from record."
         @last_msg_was_alert = true
       end
@@ -167,6 +174,7 @@ class SilentDataCorruptionDetector
       # mtime looks different, so we expect the hash _could_ intentionally be different, so just update the DB
       file_hash = hash(file)
       _db_call { @DB[:files].where(file: file).update(hash: file_hash, mtime: File.mtime(file), iteration: @iteration, updated_at: Time.now) } unless file_hash.nil?
+      @count_of_updated_records += 1
     end
   end
 
@@ -190,10 +198,14 @@ class SilentDataCorruptionDetector
     end
 
     print "Current File   : #{@current_file}\n"
-    print "Total Processed: #{number_with_delimiter(@files_processed)} / #{number_with_delimiter(@total_files)} files\n"
+    print "Total Processed: #{number_with_delimiter(@files_processed)} / #{number_with_delimiter(@total_files)} files" +
+          " (Records: #{@count_of_new_records} new, #{@count_of_updated_records} updated, #{@count_of_matching_hashes} matching)\n"
     print "Total Progress : " +
           "#{number_to_percentage((@bytes_processed.to_f / @total_bytes.to_f)*100, precision: 2)}".green.bold +
-          " (#{number_to_human_size(@bytes_processed)} / #{number_to_human_size(@total_bytes)})\n"
+          " (#{number_to_human_size(@bytes_processed)} / #{number_to_human_size(@total_bytes)})" +
+          " @ #{number_to_human_size(@bytes_processed - @bytes_last_update)}/s\n"
+
+    @bytes_last_update = @bytes_processed
   end
 
   def iterate
@@ -263,6 +275,7 @@ class SilentDataCorruptionDetector
         next # The full path can't be resolved for some reason, probably because this is a broken symlink, so skip.
       end
     end
+    @files.uniq! unless @skip_realpath # Remove inevitable duplicates that are a result of symlinks and such
     @files.reverse!
   end
 
