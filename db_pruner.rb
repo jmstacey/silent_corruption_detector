@@ -11,7 +11,7 @@
 # Small utility script that prunes the database of records for files that no longer exist.
 #
 # ==Usage
-# ./silent_corruption_detector.rb [START PATH] [DATABASE FILE]
+# ./db_pruner.rb "/*" ~/data.db
 #
 # ==License
 # The MIT License (MIT)
