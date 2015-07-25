@@ -303,7 +303,7 @@ class SilentDataCorruptionDetector
     unless progress_method.nil?
       until worker.status == false
         self.send progress_method
-        sleep 1
+        sleep frequency
       end
       self.send progress_method if trailing_progress
     end
