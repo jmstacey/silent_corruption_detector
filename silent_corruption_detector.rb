@@ -26,6 +26,20 @@
 # If no [START PATH] is provided, the default will use the root (/) directory
 # If no [DATABASE FILE] is provided, the default will use ./data.db (in the working directory)
 #
+# ===Options
+# --skip_realpath
+#     Prevent #realpath from being called. This has two affects:
+#       (1) Relative paths will be stored in the database instead of absolute paths if [START PATH] is also relative
+#       (2) Prevents absolute path resolution which is useful when scanning multiple disks with the same data [which could have different absolute paths due to volume names]
+#           For example, '/Volumes/backup 1' and '/Volumes/backup 2' could be treated as the same dataset
+#
+# ===Examples
+# # Run on Jon's home directory
+# ./silent_corruption_detector.rb /Users/jon ~/data.db
+# # Scan a Time Machine drive using relative path
+# cd /Volumes/Time Machine 2" && /Users/jon/silent_corruption_detector.rb . ~/data.db --skip_realpath
+#
+#
 # ==License
 # The MIT License (MIT)
 #
